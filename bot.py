@@ -2,13 +2,22 @@ import logging
 import os
 import random
 import re
+import uuid
+from datetime import datetime
 import requests
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
+    Update,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    InlineQueryHandler,
     MessageHandler,
     filters,
 )
@@ -19,9 +28,122 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
+# دیتابیس بین‌المللی آدرس‌های فیک
+ADDRESS_DATABASES = {
+    "us": {
+        "name": "ایالات متحده (US) 🇺🇸",
+        "first_names": [
+            "John",
+            "Emma",
+            "Michael",
+            "Sophia",
+            "William",
+            "Olivia",
+        ],
+        "last_names": ["Smith", "Johnson", "Williams", "Brown", "Jones", "Miller"],
+        "streets": ["Main St", "Broadway", "First Ave", "Park Ave", "Washington St"],
+        "cities": [
+            {"city": "New York", "state": "NY", "zip": "10001"},
+            {"city": "Los Angeles", "state": "CA", "zip": "90001"},
+            {"city": "Chicago", "state": "IL", "zip": "60601"},
+        ],
+        "phone_gen": lambda: f"+1{random.randint(200, 999)}{random.randint(100, 999)}{random.randint(1000, 9999)}",
+    },
+    "uk": {
+        "name": "انگلستان (UK) 🇬🇧",
+        "first_names": ["Oliver", "Harry", "George", "Amelia", "Isla", "Ava"],
+        "last_names": ["Smith", "Jones", "Taylor", "Brown", "Davies", "Evans"],
+        "streets": ["Baker St", "Oxford St", "Regent St", "Piccadilly", "Abbey Rd"],
+        "cities": [
+            {"city": "London", "state": "Greater London", "zip": "SW1A 1AA"},
+            {"city": "Manchester", "state": "Greater Manchester", "zip": "M1 1AE"},
+            {
+                "city": "Birmingham",
+                "state": "West Midlands",
+                "zip": "B1 1BB",
+            },
+        ],
+        "phone_gen": lambda: f"+44 20 {random.randint(7000, 7999)} {random.randint(1000, 9999)}",
+    },
+    "ca": {
+        "name": "کانادا (CA) 🇨🇦",
+        "first_names": ["Liam", "Noah", "Lucas", "Olivia", "Emma", "Charlotte"],
+        "last_names": ["Roy", "Gagnon", "Tremblay", "Morin", "Lavoie", "Fortin"],
+        "streets": ["Yonge St", "Queen St W", "Robson St", "St. Catherine St"],
+        "cities": [
+            {"city": "Toronto", "state": "ON", "zip": "M5V 2H1"},
+            {"city": "Vancouver", "state": "BC", "zip": "V6B 3K9"},
+            {"city": "Montreal", "state": "QC", "zip": "H3B 2Y5"},
+        ],
+        "phone_gen": lambda: f"+1 416 {random.randint(200, 999)} {random.randint(1000, 9999)}",
+    },
+    "de": {
+        "name": "آلمان (DE) 🇩🇪",
+        "first_names": [
+            "Maximilian",
+            "Alexander",
+            "Paul",
+            "Sophie",
+            "Maria",
+            "Anna",
+        ],
+        "last_names": ["Müller", "Schmidt", "Schneider", "Fischer", "Weber"],
+        "streets": [
+            "Hauptstraße",
+            "Berliner Straße",
+            "Bahnhofstraße",
+            "Gartenstraße",
+        ],
+        "cities": [
+            {"city": "Berlin", "state": "Berlin", "zip": "10115"},
+            {"city": "Munich", "state": "Bavaria", "zip": "80331"},
+            {"city": "Hamburg", "state": "Hamburg", "zip": "20095"},
+        ],
+        "phone_gen": lambda: f"+49 30 {random.randint(100000, 999999)}",
+    },
+    "fr": {
+        "name": "فرانسه (FR) 🇫🇷",
+        "first_names": ["Gabriel", "Louis", "Jules", "Emma", "Chloé", "Manon"],
+        "last_names": ["Martin", "Bernard", "Dubois", "Thomas", "Robert"],
+        "streets": [
+            "Rue de la Paix",
+            "Avenue des Champs-Élysées",
+            "Rue de Rivoli",
+        ],
+        "cities": [
+            {"city": "Paris", "state": "Île-de-France", "zip": "75001"},
+            {"city": "Lyon", "state": "Auvergne-Rhône-Alpes", "zip": "69001"},
+            {
+                "city": "Marseille",
+                "state": "Provence-Alpes-Côte d'Azur",
+                "zip": "13001",
+            },
+        ],
+        "phone_gen": lambda: f"+33 1 {random.randint(10, 99)} {random.randint(10, 99)} {random.randint(10, 99)}",
+    },
+    "au": {
+        "name": "استرالیا (AU) 🇦🇺",
+        "first_names": [
+            "Oliver",
+            "Noah",
+            "Jack",
+            "Charlotte",
+            "Isla",
+            "Mia",
+        ],
+        "last_names": ["Smith", "Jones", "Williams", "Brown", "Wilson", "Taylor"],
+        "streets": ["George St", "Collins St", "Queen St", "Adelaide St"],
+        "cities": [
+            {"city": "Sydney", "state": "NSW", "zip": "2000"},
+            {"city": "Melbourne", "state": "VIC", "zip": "3000"},
+            {"city": "Brisbane", "state": "QLD", "zip": "4000"},
+        ],
+        "phone_gen": lambda: f"+61 2 {random.randint(2000, 9999)} {random.randint(1000, 9999)}",
+    },
+}
+
 
 def luhn_check(card_number):
-  """الگوریتم Luhn برای بررسی اعتبار ریاضی کارت"""
   digits = [int(c) for c in card_number]
   checksum = 0
   for i, digit in enumerate(reversed(digits)):
@@ -36,7 +158,6 @@ def luhn_check(card_number):
 
 
 def get_card_brand(card_number):
-  """تشخیص برند کارت بین‌المللی"""
   if re.match(r"^4[0-9]{12}(?:[0-9]{3})?(?:[0-9]{3})?$", card_number):
     return "Visa 💳"
   elif re.match(
@@ -49,12 +170,11 @@ def get_card_brand(card_number):
   elif re.match(r"^(6011|65[0-9]{2}|64[4-9][0-9])[0-9]{12,15}$", card_number):
     return "Discover 💳"
   else:
-    return "سایر / نامشخص ❓"
+    return "سایر ❓"
 
 
 def get_bin_info(card_number_or_bin):
-  """استعلام اطلاعات BIN از سرویس آنلاین بین‌المللی"""
-  bin_code = card_number_or_bin[:6]  # ۶ رقم اول همیشه BIN است
+  bin_code = card_number_or_bin[:6]
   try:
     response = requests.get(
         f"https://lookup.binlist.net/{bin_code}",
@@ -66,7 +186,6 @@ def get_bin_info(card_number_or_bin):
       return {
           "scheme": data.get("scheme", "نامشخص").upper(),
           "type": data.get("type", "نامشخص").upper(),
-          "brand": data.get("brand", "نامشخص"),
           "country": data.get("country", {}).get("name", "نامشخص"),
           "bank": data.get("bank", {}).get("name", "نامشخص"),
       }
@@ -75,14 +194,23 @@ def get_bin_info(card_number_or_bin):
   return None
 
 
+def is_expired(month_str, year_str):
+  try:
+    month = int(month_str)
+    year = int("20" + year_str)
+    now = datetime.now()
+    if year < now.year or (year == now.year and month < now.month):
+      return True
+  except Exception:
+    return True
+  return False
+
+
 def generate_card_from_bin(bin_prefix, target_length=16):
-  """تولید شماره کارت معتبر بر اساس یک BIN ورودی و الگوریتم Luhn"""
   bin_prefix = re.sub(r"\D", "", bin_prefix)
   card = bin_prefix
-
   while len(card) < target_length - 1:
     card += str(random.randint(0, 9))
-
   for d in range(10):
     test_card = card + str(d)
     if luhn_check(test_card):
@@ -91,28 +219,10 @@ def generate_card_from_bin(bin_prefix, target_length=16):
 
 
 def generate_random_cvv(card_number):
-  """تولید کد CVV مناسب بر اساس نوع کارت"""
   if card_number.startswith("3"):
     return f"{random.randint(1000, 9999)}"
   else:
     return f"{random.randint(100, 999)}"
-
-
-def validate_single_card(card_number):
-  card_number = re.sub(r"\D", "", card_number)
-  if len(card_number) < 13 or len(card_number) > 19:
-    return {"valid": False, "message": "طول کارت نامعتبر (۱۳ تا ۱۹ رقم)."}
-
-  brand = get_card_brand(card_number)
-  if not luhn_check(card_number):
-    return {
-        "valid": False,
-        "brand": brand,
-        "message": "رد شده در الگوریتم Luhn (ساختار ریاضی نادرست).",
-    }
-
-  bin_info = get_bin_info(card_number)
-  return {"valid": True, "brand": brand, "bin_info": bin_info}
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -122,17 +232,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
               "⚙️ راهنمای ربات", callback_data="help_callback"
           ),
           InlineKeyboardButton(
-              "🎲 کارت تستی رندوم", callback_data="generate_callback"
+              "📍 آدرس فیک آمریکا", callback_data="address_us_callback"
           ),
       ]
   ]
   reply_markup = InlineKeyboardMarkup(keyboard)
 
   welcome_text = (
-      "👋 **به ربات بررسی و تولید کارت خوش آمدید!**\n\n"
-      "• **ارسال BIN (مثل `5154620`):** دریافت اطلاعات کامل + نمونه کارت\n"
-      "• **ارسال کارت کامل (مثل `5154620021102593`):** بررسی اعتبار + اطلاعات بانک\n"
-      "• **دستور ساخت سریع:** `/gen <BIN> <تعداد>`"
+      "👋 **به ربات پیشرفته مالی و کارتی خوش آمدید!**\n\n"
+      "• **ارسال BIN یا کارت:** استعلام و اعتبارسنجی آنی\n"
+      "• **تولید کارت با BIN:** `/gen <BIN> <تعداد>`\n"
+      "• **تولید آدرس فیک بین‌المللی:** `/address <کد کشور>`\n"
+      "  *(مثال‌ها: `/address us` ، `/address uk` ، `/address de` ، `/address"
+      " ca`)*\n"
+      "• **تبدیل ارز:** `/convert <مقدار> <ارز>` (مثال: `/convert 50 USD`)"
   )
   await update.message.reply_text(
       welcome_text, reply_markup=reply_markup, parse_mode="Markdown"
@@ -145,38 +258,112 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
   if query.data == "help_callback":
     await query.message.reply_text(
-        "📖 **راهنمای استفاده:**\n\n"
-        "1. می‌توانید یک BIN دلخواه (مثل `5154620`) بفرستید تا اطلاعات و نمونه کارت بگیرید.\n"
-        "2. می‌توانید شماره کارت کامل بفرستید تا اعتبارسنجی شود.\n"
-        "3. از دستور `/gen 5154620 5` برای دریافت لیست ردیفی استفاده کنید.",
+        "📖 **راهنمای سریع:**\n\n"
+        "1. ارسال لیست کارت‌ها با فرمت `Card|MM|YY|CVV` جهت بررسی.\n"
+        "2. دستور `/address uk` یا `/address de` برای دریافت آدرس فیک کشور دلخواه.\n"
+        "3. دستور `/convert 100 USD` برای تبدیل ارز.",
         parse_mode="Markdown",
     )
-  elif query.data == "generate_callback":
-    card = generate_card_from_bin("400300")
-    month = f"{random.randint(1, 12):02d}"
-    year = f"{random.randint(27, 32)}"
-    cvv = generate_random_cvv(card)
-    result_line = f"{card}|{month}|{year}|{cvv}"
-    await query.message.reply_text(
-        f"🎲 **کارت تستی تولید شده:**\n\n```text\n{result_line}\n```",
+  elif query.data == "address_us_callback":
+    db = ADDRESS_DATABASES["us"]
+    fn = random.choice(db["first_names"])
+    ln = random.choice(db["last_names"])
+    c_info = random.choice(db["cities"])
+    street = f"{random.randint(100, 9999)} {random.choice(db['streets'])}"
+    phone = db["phone_gen"]()
+
+    addr_text = (
+        f"📍 **آدرس فیک معتبر ({db['name']}):**\n\n"
+        f"👤 نام: `{fn} {ln}`\n"
+        f"🏠 آدرس: `{street}`\n"
+        f"🏙 شهر: `{c_info['city']}`\n"
+        f"🏛 ایالت/منطقه: `{c_info['state']}`\n"
+        f"📮 کد پستی: `{c_info['zip']}`\n"
+        f"📞 تلفن: `{phone}`"
+    )
+    await query.message.reply_text(addr_text, parse_mode="Markdown")
+
+
+async def address_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  args = context.args
+  country_code = args[0].lower() if args else "us"
+
+  if country_code not in ADDRESS_DATABASES:
+    supported = ", ".join(ADDRESS_DATABASES.keys())
+    await update.message.reply_text(
+        f"⚠️ کشور مورد نظر پشتیبانی نمی‌شود یا اشتباه وارد شده است.\n\n"
+        f"🌍 **کشورهای پشتیبانی شده:** `{supported}`\n"
+        f"مثال استفاده: `/address uk`",
         parse_mode="Markdown",
     )
+    return
+
+  db = ADDRESS_DATABASES[country_code]
+  fn = random.choice(db["first_names"])
+  ln = random.choice(db["last_names"])
+  c_info = random.choice(db["cities"])
+  street = f"{random.randint(100, 9999)} {random.choice(db['streets'])}"
+  phone = db["phone_gen"]()
+
+  addr_text = (
+      f"📍 **آدرس فیک معتبر ({db['name']}):**\n\n"
+      f"👤 نام: `{fn} {ln}`\n"
+      f"🏠 آدرس: `{street}`\n"
+      f"🏙 شهر: `{c_info['city']}`\n"
+      f"🏛 ایالت/منطقه: `{c_info['state']}`\n"
+      f"📮 کد پستی: `{c_info['zip']}`\n"
+      f"📞 تلفن: `{phone}`"
+  )
+  await update.message.reply_text(addr_text, parse_mode="Markdown")
+
+
+async def convert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  args = context.args
+  if len(args) < 2:
+    await update.message.reply_text(
+        "⚠️ فرمت دستور نادرست.\nمثال: `/convert 50 USD`", parse_mode="Markdown"
+    )
+    return
+  try:
+    amount = float(args[0])
+    currency = args[1].upper()
+  except ValueError:
+    await update.message.reply_text("⚠️ مقدار عددی وارد شده معتبر نیست.")
+    return
+
+  try:
+    res = requests.get(
+        f"https://open.er-api.com/v6/latest/{currency}", timeout=3
+    )
+    if res.status_code == 200:
+      rates = res.json().get("rates", {})
+      eur = rates.get("EUR", 0) * amount
+      gbp = rates.get("GBP", 0) * amount
+      cad = rates.get("CAD", 0) * amount
+      txt = (
+          f"💱 **نرخ تبدیل برای {amount} {currency}:**\n\n"
+          f"💶 یورو (EUR): `{eur:.2f}`\n"
+          f"💷 پوند (GBP): `{gbp:.2f}`\n"
+          f"🇨🇦 دلار کانادا (CAD): `{cad:.2f}`"
+      )
+      await update.message.reply_text(txt, parse_mode="Markdown")
+    else:
+      await update.message.reply_text("⚠️ خطا در دریافت نرخ ارز از سرور.")
+  except Exception:
+    await update.message.reply_text("⚠️ خطای ارتباطی در دریافت نرخ ارز.")
 
 
 async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  """دستور جنریت کارت بر اساس BIN ورودی"""
   args = context.args
   if not args:
     await update.message.reply_text(
-        "⚠️ لطفاً BIN مورد نظر را وارد کنید.\n"
-        "مثال: `/gen 5154620 5`",
+        "⚠️ لطفاً BIN مورد نظر را وارد کنید.\nمثال: `/gen 5154620 5`",
         parse_mode="Markdown",
     )
     return
 
   bin_prefix = args[0]
   count = 5
-
   if len(args) > 1 and args[1].isdigit():
     count = int(args[1])
     if count > 20:
@@ -194,86 +381,136 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   await update.message.reply_text(response_text, parse_mode="Markdown")
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  text = update.message.text
-  lines = text.strip().split("\n")
-  queries = []
-  for line in lines:
-    # جستجوی اعداد از ۶ رقم به بالا (هم شامل BIN و هم شماره کارت کامل)
-    found = re.findall(r"\d{6,19}", line)
-    queries.extend(found)
+async def inline_query_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
+  query = update.inline_query.query.strip()
+  results = []
 
-  if not queries:
-    await update.message.reply_text(
-        "⚠️ لطفاً یک BIN معتبر (حداقل ۶ رقم) یا شماره کارت کامل ارسال کنید."
-    )
-    return
-
-  query_str = queries[0]
-
-  # بررسی اینکه آیا ورودی BIN است (کمتر از ۱۳ رقم) یا کارت کامل
-  if len(query_str) < 13:
-    bin_code = query_str
-    bin_info = get_bin_info(bin_code)
-
-    msg = f"🔍 **اطلاعات BIN:** `{bin_code}`\n\n"
-    if bin_info:
-      msg += (
-          f"🌍 **کشور:** {bin_info['country']}\n"
-          f"🏦 **بانک:** {bin_info['bank']}\n"
-          f"💳 **برند/طرح:** {bin_info['scheme']} ({bin_info['brand']})\n"
-          f"📋 **نوع کارت:** {bin_info['type']}\n\n"
-      )
-    else:
-      msg += "⚠️ اطلاعاتی برای این BIN در پایگاه داده یافت نشد.\n\n"
-
-    # تولید ۳ نمونه کارت با این BIN
-    msg += "🎲 **نمونه کارت‌های تولید شده:**\n```text\n"
-    sample_cards = []
-    for _ in range(3):
-      card = generate_card_from_bin(bin_code)
-      month = f"{random.randint(1, 12):02d}"
-      year = f"{random.randint(27, 32)}"
-      cvv = generate_random_cvv(card)
-      sample_cards.append(f"{card}|{month}|{year}|{cvv}")
-    msg += "\n".join(sample_cards) + "\n```"
-
-    await update.message.reply_text(msg, parse_mode="Markdown")
-
-  else:
-    # اگر شماره کارت کامل بود (۱۳ تا ۱۹ رقم)
-    card = query_str
-    res = validate_single_card(card)
+  if len(query) >= 6:
+    card = generate_card_from_bin(query[:6])
     month = f"{random.randint(1, 12):02d}"
     year = f"{random.randint(27, 32)}"
     cvv = generate_random_cvv(card)
+    card_line = f"{card}|{month}|{year}|{cvv}"
 
-    if res["valid"]:
-      msg = (
-          f"✅ **کارت معتبر است**\n`{card}`\n\n"
-          f"💳 **برند:** {res['brand']}\n"
-          f"📋 **فرمت استاندارد:**\n```text\n{card}|{month}|{year}|{cvv}\n```"
-      )
-      if res["bin_info"]:
-        bi = res["bin_info"]
-        msg += (
-            f"\n🌍 **کشور:** {bi['country']}\n"
-            f"🏦 **بانک:** {bi['bank']}\n"
-            f"📋 **نوع:** {bi['type']} ({bi['scheme']})"
+    results.append(
+        InlineQueryResultArticle(
+            id=str(uuid.uuid4()),
+            title=f"تولید کارت برای BIN: {query}",
+            description=f"نمونه: {card_line}",
+            input_message_content=InputTextMessageContent(
+                f"```text\n{card_line}\n```", parse_mode="Markdown"
+            ),
         )
+    )
+  else:
+    results.append(
+        InlineQueryResultArticle(
+            id=str(uuid.uuid4()),
+            title="راهنمای جستجوی درون‌خطی",
+            description="حداقل ۶ رقم اول (BIN) را وارد کنید...",
+            input_message_content=InputTextMessageContent(
+                "لطفاً حداقل ۶ رقم اول BIN را وارد کنید.", parse_mode="Markdown"
+            ),
+        )
+    )
+
+  await update.inline_query.answer(results, cache_time=1)
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+  text = update.message.text
+  lines = text.strip().split("\n")
+
+  live_cards = []
+  dead_cards = []
+  bin_queries = []
+
+  for line in lines:
+    line = line.strip()
+    if not line:
+      continue
+
+    if "|" in line:
+      parts = line.split("|")
+      if len(parts) >= 4:
+        card_num = re.sub(r"\D", "", parts[0])
+        month = parts[1].strip()
+        year = parts[2].strip()
+        cvv = parts[3].strip()
+
+        if (
+            13 <= len(card_num) <= 19
+            and luhn_check(card_num)
+            and not is_expired(month, year)
+        ):
+          brand = get_card_brand(card_num)
+          live_cards.append(f"`{card_num}|{month}|{year}|{cvv}` ({brand})")
+        else:
+          dead_cards.append(f"`{card_num}|{month}|{year}|{cvv}`")
+      else:
+        dead_cards.append(f"`{line}`")
     else:
-      msg = (
-          f"❌ **کارت نامعتبر است**\n`{card}`\n⚠️ **دلیل:** {res['message']}"
-      )
-      bin_info = get_bin_info(card)
+      found = re.findall(r"\d{6,19}", line)
+      bin_queries.extend(found)
+
+  if live_cards or dead_cards:
+    response = "📊 **گزارش بررسی کارت‌ها:**\n\n"
+    if live_cards:
+      response += f"🟢 **سالم / معتبر ({len(live_cards)}):**\n"
+      response += "\n".join(live_cards[:15]) + "\n\n"
+    if dead_cards:
+      response += f"🔴 **ناسالم / منقضی ({len(dead_cards)}):**\n"
+      response += "\n".join(dead_cards[:15]) + "\n\n"
+    response += (
+        f"📈 **آمار:** کل: {len(live_cards) + len(dead_cards)} | سالم:"
+        f" {len(live_cards)} | ناسالم: {len(dead_cards)}"
+    )
+    await update.message.reply_text(response, parse_mode="Markdown")
+    return
+
+  if bin_queries:
+    query_str = bin_queries[0]
+    if len(query_str) < 13:
+      bin_code = query_str
+      bin_info = get_bin_info(bin_code)
+      msg = f"🔍 **اطلاعات BIN:** `{bin_code}`\n\n"
       if bin_info:
         msg += (
-            f"\n\n🌍 **کشور:** {bin_info['country']}\n🏦 **بانک:**"
-            f" {bin_info['bank']}\n📋 **نوع:** {bin_info['type']}"
-            f" ({bin_info['scheme']})"
+            f"🌍 **کشور:** {bin_info['country']}\n"
+            f"🏦 **بانک:** {bin_info['bank']}\n"
+            f"📋 **نوع:** {bin_info['type']} ({bin_info['scheme']})\n\n"
         )
+      else:
+        msg += "⚠️ اطلاعاتی برای این BIN یافت نشد.\n\n"
 
-    await update.message.reply_text(msg, parse_mode="Markdown")
+      msg += "🎲 **نمونه کارت‌ها:**\n```text\n"
+      sample_cards = []
+      for _ in range(3):
+        card = generate_card_from_bin(bin_code)
+        month = f"{random.randint(1, 12):02d}"
+        year = f"{random.randint(27, 32)}"
+        cvv = generate_random_cvv(card)
+        sample_cards.append(f"{card}|{month}|{year}|{cvv}")
+      msg += "\n".join(sample_cards) + "\n```"
+      await update.message.reply_text(msg, parse_mode="Markdown")
+    else:
+      card = query_str
+      month = f"{random.randint(1, 12):02d}"
+      year = f"{random.randint(27, 32)}"
+      cvv = generate_random_cvv(card)
+      brand = get_card_brand(card)
+      if luhn_check(card):
+        msg = (
+            f"✅ **کارت معتبر است**\n"
+            f"💳 **برند:** {brand}\n"
+            f"📋 **فرمت استاندارد:**\n```text\n{card}|{month}|{year}|{cvv}\n```"
+        )
+      else:
+        msg = f"❌ **کارت نامعتبر است**\n`{card}`"
+      await update.message.reply_text(msg, parse_mode="Markdown")
+      return
 
 
 def main():
@@ -286,10 +523,13 @@ def main():
 
   app.add_handler(CommandHandler("start", start_command))
   app.add_handler(CommandHandler("gen", generate_command))
+  app.add_handler(CommandHandler("address", address_command))
+  app.add_handler(CommandHandler("convert", convert_command))
   app.add_handler(CallbackQueryHandler(button_handler))
+  app.add_handler(InlineQueryHandler(inline_query_handler))
   app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-  print("ربات با موفقیت به روزرسانی شد و در حال اجراست...")
+  print("ربات بین‌المللی با موفقیت روشن شد...")
   app.run_polling()
 
 
