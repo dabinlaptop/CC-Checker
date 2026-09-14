@@ -2,7 +2,12 @@ import logging
 import os
 import re
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 # تنظیمات لاگ‌گیری
 logging.basicConfig(
@@ -12,7 +17,7 @@ logging.basicConfig(
 
 
 def luhn_check(card_number):
-  """الگوریتم Luhn برای بررسی اعتبار ریاضی کارت‌های اعتباری بین‌المللی"""
+  """الگوریتم Luhn برای بررسی اعتبار کارت‌های بانکی"""
   digits = [int(c) for c in card_number]
   checksum = 0
   for i, digit in enumerate(reversed(digits)):
@@ -27,7 +32,7 @@ def luhn_check(card_number):
 
 
 def get_card_brand(card_number):
-  """تشخیص نوع برند کارت (ویزا، مستر، آمریکن اکسپرس و...)"""
+  """تشخیص برند کارت بین‌المللی"""
   if re.match(r"^4[0-9]{12}(?:[0-9]{3})?(?:[0-9]{3})?$", card_number):
     return "Visa 💳"
   elif re.match(
@@ -44,10 +49,8 @@ def get_card_brand(card_number):
 
 
 def validate_foreign_card(card_number):
-  # پاکسازی کاراکترهای اضافی (فاصله و خط تیره)
   card_number = re.sub(r"\D", "", card_number)
 
-  # بررسی طول شماره کارت بین‌المللی (معمولاً بین ۱۳ تا ۱۹ رقم)
   if len(card_number) < 13 or len(card_number) > 19:
     return {
         "valid": False,
@@ -92,15 +95,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-  # دریافت توکن ربات از متغیرهای محیطی Railway
   token = os.getenv("BOT_TOKEN")
   if not token:
     print("خطا: توکن ربات (BOT_TOKEN) تنظیم نشده است.")
     return
 
   app = ApplicationBuilder().token(token).build()
-
-  # دریافت تمام پیام‌های متنی ارسالی به ربات
   app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
   print("ربات با موفقیت روشن شد و در حال گوش دادن به پیام‌هاست...")
