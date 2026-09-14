@@ -243,9 +243,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
       "• **ارسال BIN یا کارت:** استعلام و اعتبارسنجی آنی\n"
       "• **تولید کارت با BIN:** `/gen <BIN> <تعداد>`\n"
       "• **تولید آدرس فیک بین‌المللی:** `/address <کد کشور>`\n"
-      "  *(مثال‌ها: `/address us` ، `/address uk` ، `/address de` ، `/address"
-      " ca`)*\n"
-      "• **تبدیل ارز:** `/convert <مقدار> <ارز>` (مثال: `/convert 50 USD`)"
+      "  *(مثال‌ها: `/address us` ، `/address uk` ، `/address de`)*\n"
+      "• **تبدیل ارز (شامل تومان):** `/convert <مقدار> <ارز>` (مثال:"
+      " `/convert 50 USD`)"
   )
   await update.message.reply_text(
       welcome_text, reply_markup=reply_markup, parse_mode="Markdown"
@@ -259,9 +259,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
   if query.data == "help_callback":
     await query.message.reply_text(
         "📖 **راهنمای سریع:**\n\n"
-        "1. ارسال لیست کارت‌ها با فرمت `Card|MM|YY|CVV` جهت بررسی.\n"
-        "2. دستور `/address uk` یا `/address de` برای دریافت آدرس فیک کشور دلخواه.\n"
-        "3. دستور `/convert 100 USD` برای تبدیل ارز.",
+        "1. ارسال لیست کارت‌ها با فرمت `Card|MM|YY|CVV` جهت بررسی سالم بودن.\n"
+        "2. دستور `/address uk` برای دریافت آدرس فیک کشور دلخواه.\n"
+        "3. دستور `/convert 100 USD` برای تبدیل نرخ ارز به تومان و سایر ارزها.",
         parse_mode="Markdown",
     )
   elif query.data == "address_us_callback":
@@ -340,8 +340,13 @@ async def convert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
       eur = rates.get("EUR", 0) * amount
       gbp = rates.get("GBP", 0) * amount
       cad = rates.get("CAD", 0) * amount
+      # تبدیل ریال (IRR) به تومان (هر ۱۰ ریال = ۱ تومان)
+      irr = rates.get("IRR", 0) * amount
+      toman = irr / 10
+
       txt = (
           f"💱 **نرخ تبدیل برای {amount} {currency}:**\n\n"
+          f"🇮🇷 تومان (TOMAN): `{toman:,.0f}`\n"
           f"💶 یورو (EUR): `{eur:.2f}`\n"
           f"💷 پوند (GBP): `{gbp:.2f}`\n"
           f"🇨🇦 دلار کانادا (CAD): `{cad:.2f}`"
@@ -522,6 +527,7 @@ def main():
   app = ApplicationBuilder().token(token).build()
 
   app.add_handler(CommandHandler("start", start_command))
+  app.add_handler(CommandHandler("generate", generate_command))
   app.add_handler(CommandHandler("gen", generate_command))
   app.add_handler(CommandHandler("address", address_command))
   app.add_handler(CommandHandler("convert", convert_command))
@@ -529,7 +535,7 @@ def main():
   app.add_handler(InlineQueryHandler(inline_query_handler))
   app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-  print("ربات بین‌المللی با موفقیت روشن شد...")
+  print("ربات همراه با تبدیل نرخ تومان روشن شد...")
   app.run_polling()
 
 
