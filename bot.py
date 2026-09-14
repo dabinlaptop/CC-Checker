@@ -29,7 +29,7 @@ logging.basicConfig(
     level=logging.INFO,
 )
 
-# تنظیم کلید API استرانپ از متغیرهای محیطی
+# تنظیم کلید Secret Key استرانپ از متغیرهای محیطی Railway
 stripe.api_key = os.getenv("STRIPE_API_KEY")
 
 # دیتابیس بین‌المللی آدرس‌های فیک
@@ -177,27 +177,6 @@ def get_card_brand(card_number):
     return "سایر ❓"
 
 
-def get_bin_info(card_number_or_bin):
-  bin_code = card_number_or_bin[:6]
-  try:
-    response = requests.get(
-        f"https://lookup.binlist.net/{bin_code}",
-        headers={"Accept-Version": "3"},
-        timeout=3,
-    )
-    if response.status_code == 200:
-      data = response.json()
-      return {
-          "scheme": data.get("scheme", "نامشخص").upper(),
-          "type": data.get("type", "نامشخص").upper(),
-          "country": data.get("country", {}).get("name", "نامشخص"),
-          "bank": data.get("bank", {}).get("name", "نامشخص"),
-      }
-  except Exception:
-    pass
-  return None
-
-
 def generate_card_from_bin(bin_prefix, target_length=16):
   bin_prefix = re.sub(r"\D", "", bin_prefix)
   card = bin_prefix
@@ -218,21 +197,21 @@ def generate_random_cvv(card_number):
 
 
 def test_card_on_stripe(card_num, month, year, cvv):
-  """تست واقعی کارت روی درگاه Stripe در حالت Test Mode"""
+  """تست واقعی کارت روی درگاه Stripe در حالت Test Mode (با استفاده از cvc به جای cvv)"""
   if not stripe.api_key:
     return False, "کلید STRIPE_API_KEY تنظیم نشده است."
   try:
     if len(year) == 2:
       year = "20" + year
 
-    # ایجاد PaymentMethod در استرانپ
+    # ایجاد PaymentMethod در استرانپ (استفاده از cvc)
     payment_method = stripe.PaymentMethod.create(
         type="card",
         card={
             "number": card_num,
             "exp_month": int(month),
             "exp_year": int(year),
-            "cvv": cvv,
+            "cvc": cvv,  # <--- اصلاح شد به cvc
         },
     )
 
@@ -345,7 +324,7 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   bin_prefix = args[0]
   count = int(args[1]) if len(args) > 1 and args[1].isdigit() else 5
   if count > 10:
-    count = 10  # محدودیت برای تست استرانپ
+    count = 10
 
   cards_output = []
   for _ in range(count):
@@ -384,7 +363,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results_msg += "\n⚠️ حداکثر ۵ کارت در هر پیام تست می‌شود."
         break
 
-      # تست واقعی روی استرانپ
+      # تست روی استرانپ با پارامتر صحیح
       success, msg = test_card_on_stripe(card_num, month, year, cvv)
       if success:
         results_msg += f"🟢 `{card_num}|{month}|{year}|{cvv}` ➔ {msg}\n"
@@ -415,7 +394,7 @@ def main():
   app.add_handler(CommandHandler("convert", convert_command))
   app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-  print("ربات با قابلیت تست Stripe روشن شد...")
+  print("ربات با قابلیت تست Stripe (با پارامتر صحیح cvc) روشن شد...")
   app.run_polling()
 
 
