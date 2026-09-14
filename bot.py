@@ -2,7 +2,6 @@ import logging
 import os
 import random
 import re
-from datetime import datetime
 import requests
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -81,11 +80,9 @@ def generate_card_from_bin(bin_prefix, target_length=16):
   bin_prefix = re.sub(r"\D", "", bin_prefix)
   card = bin_prefix
 
-  # پر کردن ارقام میانی به صورت رندوم تا رسیدن به طول مورد نظر (منهای رقم آخر)
   while len(card) < target_length - 1:
     card += str(random.randint(0, 9))
 
-  # پیدا کردن رقم آخر با استفاده از الگوریتم Luhn
   for d in range(10):
     test_card = card + str(d)
     if luhn_check(test_card):
@@ -93,16 +90,9 @@ def generate_card_from_bin(bin_prefix, target_length=16):
   return card + "0"
 
 
-def generate_random_exp():
-  """تولید تاریخ انقضای رندوم (ماه و سال)"""
-  month = f"{random.randint(1, 12):02d}"
-  year = f"{random.randint(27, 32)}"  # سال‌های 2027 تا 2032
-  return f"{month}/{year}"
-
-
 def generate_random_cvv(card_number):
   """تولید کد CVV مناسب بر اساس نوع کارت"""
-  if card_number.startswith("3"):  # آمریکن اکسپرس ۴ رقمی است
+  if card_number.startswith("3"):
     return f"{random.randint(1000, 9999)}"
   else:
     return f"{random.randint(100, 999)}"
@@ -139,7 +129,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
   reply_markup = InlineKeyboardMarkup(keyboard)
 
   welcome_text = (
-      "👋 **به ربات پیشرفته بررسی و تولید کارت‌های بانکی خوش آمدید!**\n\n"
+      "👋 **به ربات بررسی و تولید کارت خوش آمدید!**\n\n"
       "• **بررسی تکی/گروهی:** شماره کارت‌ها را بفرستید.\n"
       "• **تولید با BIN خاص:** دستور زیر را ارسال کنید:\n"
       "  `/gen <BIN> <تعداد>`\n"
@@ -157,26 +147,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
   if query.data == "help_callback":
     await query.message.reply_text(
         "📖 **راهنمای استفاده:**\n\n"
-        "1. ارسال شماره کارت برای چک کردن اعتبار و استعلام بانک.\n"
-        "2. ارسال چند شماره کارت برای چک کردن دسته‌جمعی.\n"
-        "3. استفاده از `/gen 5154620` برای ساخت کارت با BIN دلخواه به همراه تاریخ و CVV.",
+        "1. ارسال کارت برای چک کردن اعتبار.\n"
+        "2. استفاده از `/gen 5154620 5` برای ساخت کارت با فرمت `Card|MM|YY|CVV`.",
         parse_mode="Markdown",
     )
   elif query.data == "generate_callback":
     card = generate_card_from_bin("400300")
-    exp = generate_random_exp()
+    month = f"{random.randint(1, 12):02d}"
+    year = f"{random.randint(27, 32)}"
     cvv = generate_random_cvv(card)
+    result_line = f"{card}|{month}|{year}|{cvv}"
     await query.message.reply_text(
-        "🎲 **کارت تستی معتبر:**\n\n"
-        f"💳 `{card}`\n"
-        f"📅 انقضا: `{exp}`\n"
-        f"🔒 CVV: `{cvv}`",
+        f"🎲 **کارت تستی تولید شده:**\n\n```text\n{result_line}\n```",
         parse_mode="Markdown",
     )
 
 
 async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  """دستور جنریت کارت بر اساس BIN ورودی کاربر"""
+  """دستور جنریت کارت بر اساس BIN ورودی با فرمت درخواستی"""
   args = context.args
   if not args:
     await update.message.reply_text(
@@ -191,19 +179,19 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
   if len(args) > 1 and args[1].isdigit():
     count = int(args[1])
-    if count > 10:
-      count = 10  # حداکثر ۱۰ کارت برای جلوگیری از شلوغی
+    if count > 20:
+      count = 20  # حداکثر ۲۰ کارت در هر درخواست
 
-  response_text = f"⚙️ **کارت‌های تولید شده برای BIN:** `{bin_prefix}`\n\n"
-
-  for i in range(count):
+  cards_output = []
+  for _ in range(count):
     card = generate_card_from_bin(bin_prefix)
-    exp = generate_random_exp()
+    month = f"{random.randint(1, 12):02d}"
+    year = f"{random.randint(27, 32)}"  # سال‌های بین 27 تا 32
     cvv = generate_random_cvv(card)
-    brand = get_card_brand(card)
-    response_text += (
-        f"**{i+1}.** `{card}` | `{exp}` | `{cvv}` | _{brand}_\n"
-    )
+    cards_output.append(f"{card}|{month}|{year}|{cvv}")
+
+  # خروجی درون کدبلاک برای کپی آسان
+  response_text = "```text\n" + "\n".join(cards_output) + "\n```"
 
   await update.message.reply_text(response_text, parse_mode="Markdown")
 
@@ -226,20 +214,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
   if len(cards) == 1:
     card = cards[0]
     res = validate_single_card(card)
-    exp = generate_random_exp()  # تاریخ انقضای تستی پیشنهادی
+    month = f"{random.randint(1, 12):02d}"
+    year = f"{random.randint(27, 32)}"
     cvv = generate_random_cvv(card)
 
     if res["valid"]:
       msg = (
           f"✅ **کارت معتبر است**\n`{card}`\n\n💳 **برند:**"
-          f" {res['brand']}\n📅 **تاریخ پیشنهادی:** `{exp}`\n🔒 **CVV پیشنهادی:**"
-          f" `{cvv}`\n"
+          f" {res['brand']}\n📋 **فرمت پیشنهادی:**\n`{card}|{month}|{year}|{cvv}`\n"
       )
       if res["bin_info"]:
         bi = res["bin_info"]
         msg += (
-            f"🌍 **کشور:** {bi['country']}\n🏦 **بانک:** {bi['bank']}\n📋"
-            f" **نوع:** {bi['type']} ({bi['scheme']})"
+            f"\n🌍 **کشور:** {bi['country']}\n🏦 **بانک:**"
+            f" {bi['bank']}\n📋 **نوع:** {bi['type']} ({bi['scheme']})"
         )
     else:
       msg = (
@@ -282,7 +270,7 @@ def main():
   app.add_handler(CallbackQueryHandler(button_handler))
   app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-  print("ربات پیشرفته همراه با قابلیت تولید کارت آماده به کار است...")
+  print("ربات با موفقیت روشن شد...")
   app.run_polling()
 
 
