@@ -52,9 +52,9 @@ def get_card_brand(card_number):
     return "سایر / نامشخص ❓"
 
 
-def get_bin_info(card_number):
+def get_bin_info(card_number_or_bin):
   """استعلام اطلاعات BIN از سرویس آنلاین بین‌المللی"""
-  bin_code = card_number[:6]
+  bin_code = card_number_or_bin[:6]  # ۶ رقم اول همیشه BIN است
   try:
     response = requests.get(
         f"https://lookup.binlist.net/{bin_code}",
@@ -130,10 +130,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
   welcome_text = (
       "👋 **به ربات بررسی و تولید کارت خوش آمدید!**\n\n"
-      "• **بررسی تکی/گروهی:** شماره کارت‌ها را بفرستید.\n"
-      "• **تولید با BIN خاص:** دستور زیر را ارسال کنید:\n"
-      "  `/gen <BIN> <تعداد>`\n"
-      "  *(مثال: `/gen 5154620 5`)*"
+      "• **ارسال BIN (مثل `5154620`):** دریافت اطلاعات کامل + نمونه کارت\n"
+      "• **ارسال کارت کامل (مثل `5154620021102593`):** بررسی اعتبار + اطلاعات بانک\n"
+      "• **دستور ساخت سریع:** `/gen <BIN> <تعداد>`"
   )
   await update.message.reply_text(
       welcome_text, reply_markup=reply_markup, parse_mode="Markdown"
@@ -147,8 +146,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
   if query.data == "help_callback":
     await query.message.reply_text(
         "📖 **راهنمای استفاده:**\n\n"
-        "1. ارسال کارت برای چک کردن اعتبار.\n"
-        "2. استفاده از `/gen 5154620 5` برای ساخت کارت با فرمت `Card|MM|YY|CVV`.",
+        "1. می‌توانید یک BIN دلخواه (مثل `5154620`) بفرستید تا اطلاعات و نمونه کارت بگیرید.\n"
+        "2. می‌توانید شماره کارت کامل بفرستید تا اعتبارسنجی شود.\n"
+        "3. از دستور `/gen 5154620 5` برای دریافت لیست ردیفی استفاده کنید.",
         parse_mode="Markdown",
     )
   elif query.data == "generate_callback":
@@ -164,7 +164,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-  """دستور جنریت کارت بر اساس BIN ورودی با فرمت درخواستی"""
+  """دستور جنریت کارت بر اساس BIN ورودی"""
   args = context.args
   if not args:
     await update.message.reply_text(
@@ -175,44 +175,74 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return
 
   bin_prefix = args[0]
-  count = 5  # پیش‌فرض ۵ عدد
+  count = 5
 
   if len(args) > 1 and args[1].isdigit():
     count = int(args[1])
     if count > 20:
-      count = 20  # حداکثر ۲۰ کارت در هر درخواست
+      count = 20
 
   cards_output = []
   for _ in range(count):
     card = generate_card_from_bin(bin_prefix)
     month = f"{random.randint(1, 12):02d}"
-    year = f"{random.randint(27, 32)}"  # سال‌های بین 27 تا 32
+    year = f"{random.randint(27, 32)}"
     cvv = generate_random_cvv(card)
     cards_output.append(f"{card}|{month}|{year}|{cvv}")
 
-  # خروجی درون کدبلاک برای کپی آسان
   response_text = "```text\n" + "\n".join(cards_output) + "\n```"
-
   await update.message.reply_text(response_text, parse_mode="Markdown")
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
   text = update.message.text
   lines = text.strip().split("\n")
-  cards = []
+  queries = []
   for line in lines:
-    found = re.findall(r"\d{13,19}", line)
-    cards.extend(found)
+    # جستجوی اعداد از ۶ رقم به بالا (هم شامل BIN و هم شماره کارت کامل)
+    found = re.findall(r"\d{6,19}", line)
+    queries.extend(found)
 
-  if not cards:
+  if not queries:
     await update.message.reply_text(
-        "⚠️ هیچ شماره کارت معتبری در پیام شما یافت نشد."
+        "⚠️ لطفاً یک BIN معتبر (حداقل ۶ رقم) یا شماره کارت کامل ارسال کنید."
     )
     return
 
-  # بررسی تک کارت
-  if len(cards) == 1:
-    card = cards[0]
+  query_str = queries[0]
+
+  # بررسی اینکه آیا ورودی BIN است (کمتر از ۱۳ رقم) یا کارت کامل
+  if len(query_str) < 13:
+    bin_code = query_str
+    bin_info = get_bin_info(bin_code)
+
+    msg = f"🔍 **اطلاعات BIN:** `{bin_code}`\n\n"
+    if bin_info:
+      msg += (
+          f"🌍 **کشور:** {bin_info['country']}\n"
+          f"🏦 **بانک:** {bin_info['bank']}\n"
+          f"💳 **برند/طرح:** {bin_info['scheme']} ({bin_info['brand']})\n"
+          f"📋 **نوع کارت:** {bin_info['type']}\n\n"
+      )
+    else:
+      msg += "⚠️ اطلاعاتی برای این BIN در پایگاه داده یافت نشد.\n\n"
+
+    # تولید ۳ نمونه کارت با این BIN
+    msg += "🎲 **نمونه کارت‌های تولید شده:**\n```text\n"
+    sample_cards = []
+    for _ in range(3):
+      card = generate_card_from_bin(bin_code)
+      month = f"{random.randint(1, 12):02d}"
+      year = f"{random.randint(27, 32)}"
+      cvv = generate_random_cvv(card)
+      sample_cards.append(f"{card}|{month}|{year}|{cvv}")
+    msg += "\n".join(sample_cards) + "\n```"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+  else:
+    # اگر شماره کارت کامل بود (۱۳ تا ۱۹ رقم)
+    card = query_str
     res = validate_single_card(card)
     month = f"{random.randint(1, 12):02d}"
     year = f"{random.randint(27, 32)}"
@@ -220,41 +250,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if res["valid"]:
       msg = (
-          f"✅ **کارت معتبر است**\n`{card}`\n\n💳 **برند:**"
-          f" {res['brand']}\n📋 **فرمت پیشنهادی:**\n`{card}|{month}|{year}|{cvv}`\n"
+          f"✅ **کارت معتبر است**\n`{card}`\n\n"
+          f"💳 **برند:** {res['brand']}\n"
+          f"📋 **فرمت استاندارد:**\n```text\n{card}|{month}|{year}|{cvv}\n```"
       )
       if res["bin_info"]:
         bi = res["bin_info"]
         msg += (
-            f"\n🌍 **کشور:** {bi['country']}\n🏦 **بانک:**"
-            f" {bi['bank']}\n📋 **نوع:** {bi['type']} ({bi['scheme']})"
+            f"\n🌍 **کشور:** {bi['country']}\n"
+            f"🏦 **بانک:** {bi['bank']}\n"
+            f"📋 **نوع:** {bi['type']} ({bi['scheme']})"
         )
     else:
       msg = (
           f"❌ **کارت نامعتبر است**\n`{card}`\n⚠️ **دلیل:** {res['message']}"
       )
+      bin_info = get_bin_info(card)
+      if bin_info:
+        msg += (
+            f"\n\n🌍 **کشور:** {bin_info['country']}\n🏦 **بانک:**"
+            f" {bin_info['bank']}\n📋 **نوع:** {bin_info['type']}"
+            f" ({bin_info['scheme']})"
+        )
+
     await update.message.reply_text(msg, parse_mode="Markdown")
-    return
-
-  # بررسی دسته‌جمعی (Bulk Check)
-  valid_count = 0
-  invalid_count = 0
-  summary_msg = "📊 **نتیجه بررسی دسته‌جمعی:**\n\n"
-
-  for card in cards[:20]:
-    res = validate_single_card(card)
-    if res["valid"]:
-      valid_count += 1
-      summary_msg += f"✅ `{card}` - معتبر ({res['brand']})\n"
-    else:
-      invalid_count += 1
-      summary_msg += f"❌ `{card}` - نامعتبر\n"
-
-  summary_msg += (
-      f"\n📈 **آمار:** کل: {len(cards[:20])} | سالم: {valid_count} | خراب:"
-      f" {invalid_count}"
-  )
-  await update.message.reply_text(summary_msg, parse_mode="Markdown")
 
 
 def main():
@@ -270,7 +289,7 @@ def main():
   app.add_handler(CallbackQueryHandler(button_handler))
   app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-  print("ربات با موفقیت روشن شد...")
+  print("ربات با موفقیت به روزرسانی شد و در حال اجراست...")
   app.run_polling()
 
 
